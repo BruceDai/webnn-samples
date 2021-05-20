@@ -3,7 +3,7 @@
 import {LeNet} from './lenet.js';
 import {Pen} from './pen.js';
 
-const compilationTimeElement = document.getElementById('compilationTime');
+const buildTimeElement = document.getElementById('buildTime');
 const inferenceTimeElement = document.getElementById('inferenceTime');
 const predictButton = document.getElementById('predict');
 const nextButton = document.getElementById('next');
@@ -37,6 +37,12 @@ function getInputFromCanvas() {
   return input;
 }
 
+function getMedianValue(array) {
+  array = array.sort((a, b) => a - b);
+  return array.length % 2 !== 0 ? array[Math.floor(array.length / 2)] :
+      (array[array.length / 2 - 1] + array[array.length / 2]) / 2;
+}
+
 function clearResult() {
   for (let i = 0; i < 3; ++i) {
     const labelElement = document.getElementById(`label${i}`);
@@ -49,19 +55,21 @@ function clearResult() {
 export async function main() {
   drawNextDigitFromMnist();
   const pen = new Pen(visualCanvas);
-  const lenet = new LeNet('lenet.bin');
+  const weightUrl = 'https://webmachinelearning.github.io/test-data/' +
+      'models/lenet_nchw/weights/lenet.bin';
+  const lenet = new LeNet(weightUrl);
   try {
     let start = performance.now();
-    await lenet.load();
+    const outputOperand = await lenet.load();
     console.log(
         `loading elapsed time: ${(performance.now() - start).toFixed(2)} ms`);
 
     start = performance.now();
-    await lenet.compile();
-    const compilationTime = performance.now() - start;
-    console.log(`compilation elapsed time: ${compilationTime.toFixed(2)} ms`);
-    compilationTimeElement.innerHTML = 'Compilation Time: ' +
-        `<span class='text-primary'>${compilationTime.toFixed(2)}</span> ms`;
+    await lenet.build(outputOperand);
+    const buildTime = performance.now() - start;
+    console.log(`build elapsed time: ${buildTime.toFixed(2)} ms`);
+    buildTimeElement.innerHTML = 'Build Time: ' +
+        `<span class='text-primary'>${buildTime.toFixed(2)}</span> ms`;
 
     predictButton.removeAttribute('disabled');
   } catch (error) {
@@ -70,14 +78,42 @@ export async function main() {
   }
   predictButton.addEventListener('click', async function(e) {
     try {
+      const params = new URLSearchParams(location.search);
+      const numRuns = params.get('numRuns');
+      const n = numRuns === null ? 1 : parseInt(numRuns);
+
+      if (n < 1) {
+        alert(`The value of param numRuns must be greater than or equal to 1.`);
+        return;
+      }
+
+      let start;
+      let result;
+      let inferenceTime;
+      const inferenceTimeArray = [];
       const input = getInputFromCanvas();
-      const start = performance.now();
-      const result = await lenet.predict(input);
-      const inferenceTime = performance.now() - start.toFixed(2);
-      console.log(`execution elapsed time: ${inferenceTime.toFixed(2)} ms`);
-      inferenceTimeElement.innerHTML = 'Execution Time: ' +
-          `<span class='text-primary'>${inferenceTime.toFixed(2)}</span> ms`;
-      console.log(`execution result: ${result}`);
+
+      for (let i = 0; i < n; i++) {
+        start = performance.now();
+        result = await lenet.predict(input);
+        inferenceTime = performance.now() - start;
+        console.log(`execution elapsed time: ${inferenceTime.toFixed(2)} ms`);
+        console.log(`execution result: ${result}`);
+        inferenceTimeArray.push(inferenceTime);
+      }
+
+      if (n === 1) {
+        inferenceTimeElement.innerHTML = 'Execution Time: ' +
+        `<span class='text-primary'>${inferenceTime.toFixed(2)}</span> ms`;
+      } else {
+        const medianInferenceTime = getMedianValue(inferenceTimeArray);
+        console.log(`median execution elapsed time: ` +
+            `${medianInferenceTime.toFixed(2)} ms`);
+        inferenceTimeElement.innerHTML = `Median Execution Time(${n} runs): ` +
+            `<span class='text-primary'>${medianInferenceTime.toFixed(2)}` +
+            '</span> ms';
+      }
+
       const classes = topK(Array.from(result));
       classes.forEach((c, i) => {
         console.log(`\tlabel: ${c.label}, probability: ${c.prob}%`);

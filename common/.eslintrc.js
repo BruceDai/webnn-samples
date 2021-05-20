@@ -1,7 +1,7 @@
 module.exports = {
   ignorePatterns: ['libs/'],
   globals: {
-    'MLGraphBuilder': 'readonly',
-    'tf': 'readonly',
+    'BigInt64Array': 'readonly',
+    'BigUint64Array': 'readonly',
   },
 };
