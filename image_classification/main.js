@@ -137,14 +137,14 @@ async function renderCamStream() {
   }
   
   console.log('- Computing... ');
-  const inputBuffer = utils.getInputGPUTensor(camElement, inputOptions);
+  const inputBuffer = utils.getInputTensor(camElement, inputOptions);
   const start = performance.now();
   await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
-  if (inputBuffer instanceof tf.Tensor) {
-    inputBuffer.dispose();
-  }
+  // if (inputBuffer instanceof tf.Tensor) {
+  //   inputBuffer.dispose();
+  // }
   drawInput(camElement, 'camInCanvas');
   showPerfResult();
   await drawOutput(outputBuffer, labels);
@@ -235,8 +235,8 @@ function constructNetObject(type) {
 
 async function main() {
   try {
-    await tf.setBackend('webgpu');
-    tf.env().set('WEBGPU_USE_IMPORT', true);
+    // await tf.setBackend('webgpu');
+    // tf.env().set('WEBGPU_USE_IMPORT', true);
     if (modelName === '') return;
     ui.handleClick(disabledSelectors, true);
     if (isFirstTimeLoad) $('#hint').hide();
@@ -285,14 +285,14 @@ async function main() {
       await ui.showProgressComponent('done', 'current', 'pending');
       console.log('- Building... ');
       start = performance.now();
-      netInstance.build(outputOperand);
+      await netInstance.build(outputOperand);
       buildTime = (performance.now() - start).toFixed(2);
       console.log(`  done in ${buildTime} ms.`);
     }
     // UI shows inferencing progress
     await ui.showProgressComponent('done', 'done', 'current');
     if (inputType === 'image') {
-      const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
+      const inputBuffer = utils.getInputTensor(imgElement, inputOptions);
       console.log('- Computing... ');
       const computeTimeArray = [];
       let medianComputeTime;
@@ -300,19 +300,19 @@ async function main() {
         // Do warm up
         await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
       }
-      if (inputBuffer instanceof tf.Tensor) {
-        inputBuffer.dispose();
-      }
+      // if (inputBuffer instanceof tf.Tensor) {
+      //   inputBuffer.dispose();
+      // }
       for (let i = 0; i < numRuns; i++) {
-        const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
+        const inputBuffer = utils.getInputTensor(imgElement, inputOptions);
         start = performance.now();
         await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
-        if (inputBuffer instanceof tf.Tensor) {
-          inputBuffer.dispose();
-        }
+        // if (inputBuffer instanceof tf.Tensor) {
+        //   inputBuffer.dispose();
+        // }
       }
       if (numRuns > 1) {
         medianComputeTime = utils.getMedianValue(computeTimeArray);

@@ -1,4 +1,4 @@
-import { sizeOfShape } from "./utils.js";
+import { sizeOfShape, createGPUBuffer, readbackGPUBuffer } from "./utils.js";
 
 export class BaseNetwork {
   constructor() {
@@ -7,70 +7,33 @@ export class BaseNetwork {
     this.graph_ = null;
   }
   async init() {
-    await tf.setBackend('webgpu');
-    this.device_ = tf.engine().backendInstance.device;
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
     this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
     this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
     this.inputGPUBuffers_ = [];
     this.outputGPUBuffer_ = null;
-    this.outputGPUBufferForProcessing_ = null;
   }
 
-  build(outputOperand) {
+
+  async build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
-    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-    this.outputGPUBufferForProcessing_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE});
-    if (this.inputOptions.std) {
-      this.inputOptions.stdTensor = tf.tensor1d(this.inputOptions.std);
-    }
-    if (this.inputOptions.mean) {
-      this.inputOptions.meanTensor = tf.tensor1d(this.inputOptions.mean);
-    }
-    if (this.inputOptions.norm) {
-      this.inputOptions.normTensor = tf.tensor1d([255, 255, 255]);
-    }
   }
 
-  dispose() {
-    // dispose() is only available in webnn-polyfill
-    if (this.graph_ !== null && 'dispose' in this.graph_) {
-      this.graph_.dispose();
-    }
-    if (this.inputOptions.meanTensor instanceof tf.Tensor) {
-      this.inputOptions.meanTensor.dispose();
-    }
-    if (this.inputOptions.stdTensor instanceof tf.Tensor) {
-      this.inputOptions.stdTensor.dispose();
-    }
-    if (this.inputOptions.normTensor instanceof tf.Tensor) {
-      this.inputOptions.normTensor.dispose();
-    }
-  }
-
-  async computeGPUTensor(inputTensor, outputBuffer, typedArrayConstructor = Float32Array) {
-    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
-    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
-    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
-    outputBuffer.set(new typedArrayConstructor(this.outputGPUBuffer_.getMappedRange()));
-    this.outputGPUBuffer_.unmap();
-  }
-
-  computeOutputGPUTensor(inputTensor) {
-    const outputTensor = tf.tidy(() => tf.add(tf.zeros(this.outputDimensions), tf.zeros(this.outputDimensions)));
-    tf.engine().backendInstance.submitQueue();
-    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
-    const outputGPUBuffer = tf.engine().backendInstance.getBuffer(outputTensor.dataId);
+  async computeGPUTensor(inputData, outputBuffer, typedArrayConstructor = Float32Array) {
+    const inputGPUBuffer = await createGPUBuffer(this.device_, sizeOfShape(this.inputOptions.inputDimensions), inputData);
+    const outputGPUBuffer =
+      // this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+      // DF: models tests invoke below function 
+      await createGPUBuffer(this.device_, sizeOfShape(this.outputDimensions));    
     this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: outputGPUBuffer}});
-    return outputTensor;
-  }
+    // await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    // outputBuffer.set(new typedArrayConstructor(this.outputGPUBuffer_.getMappedRange()));
+    // this.outputGPUBuffer_.unmap();
 
-  async computeGPUTensorToGPUBuffer(inputTensor) {
-    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
-    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBufferForProcessing_}});
-  }
-
-  getOutputGPUBufferForProcessing() {
-    return this.outputGPUBufferForProcessing_;
+    // DF: models tests invoke below function 
+    const outputData = await readbackGPUBuffer(this.device_, sizeOfShape(this.outputDimensions), outputGPUBuffer);
+    outputBuffer.set(outputData);
   }
 
   async compute(inputBuffer, outputBuffer, typedArrayConstructor = Float32Array) {

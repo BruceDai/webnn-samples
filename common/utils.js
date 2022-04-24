@@ -29,15 +29,18 @@ export async function getBufferFromUrl(url) {
 export async function createGPUBuffer(device, size, data = undefined) {
   const sizeInBytes = size * Float32Array.BYTES_PER_ELEMENT;
   const gpuBuffer = device.createBuffer({size: sizeInBytes, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+
+  const uploadBuffer = device.createBuffer({size: sizeInBytes, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
+  await uploadBuffer.mapAsync(GPUMapMode.WRITE);
   if (data !== undefined) {
-    const uploadBuffer = device.createBuffer({size: sizeInBytes, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
-    await uploadBuffer.mapAsync(GPUMapMode.WRITE);
     new Float32Array(uploadBuffer.getMappedRange()).set(data);
-    uploadBuffer.unmap();
-    const uploadEncoder = device.createCommandEncoder();
-    uploadEncoder.copyBufferToBuffer(uploadBuffer, 0, gpuBuffer, 0, sizeInBytes);
-    device.queue.submit([uploadEncoder.finish()]);
+  } else {
+    new Float32Array(uploadBuffer.getMappedRange()).set([0]);
   }
+  uploadBuffer.unmap();
+  const uploadEncoder = device.createCommandEncoder();
+  uploadEncoder.copyBufferToBuffer(uploadBuffer, 0, gpuBuffer, 0, sizeInBytes);
+  device.queue.submit([uploadEncoder.finish()]);
   return gpuBuffer;
 }
 
@@ -176,38 +179,6 @@ export function getInputTensor(inputElement, inputOptions) {
     }
   }
   return tensor;
-}
-
-export function getInputGPUTensor(inputElement, inputOptions) {
-  const inputDimensions = inputOptions.inputDimensions;
-  let [channels, height, width] = inputDimensions.slice(1);
-  const inputLayout = inputOptions.inputLayout;
-  if (inputLayout === 'nhwc') {
-    [height, width, channels] = inputDimensions.slice(1);
-  }
-  const inputTensor = tf.tidy(() => {
-    let tensor = tf.browser.fromPixels(inputElement);
-    tensor = tf.image.resizeBilinear(tensor, [height, width]);
-    if (inputOptions.normTensor instanceof tf.Tensor) {
-      tensor = tf.div(tensor, inputOptions.normTensor)
-    }
-    if (inputOptions.meanTensor instanceof tf.Tensor) {
-      tensor = tf.sub(tensor, inputOptions.meanTensor);
-    }
-    if (inputOptions.stdTensor instanceof tf.Tensor) {
-      tensor = tf.div(tensor, inputOptions.stdTensor);
-    }
-    if (inputLayout === 'nchw') {
-      // nhwc -> nchw
-      tensor = tf.transpose(tensor, [2, 0, 1]);
-    }
-    const shape = tensor.shape.slice();
-    shape.unshift(1)
-    tensor = tf.reshape(tensor, shape);
-    return tensor;
-  });
-  tf.engine().backendInstance.submitQueue();
-  return inputTensor;
 }
 
 // Get median value from an array of Number
