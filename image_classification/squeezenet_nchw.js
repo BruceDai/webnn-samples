@@ -16,7 +16,11 @@ export class SqueezeNetNchw {
       labelUrl: './labels/labels1000.txt',
       inputDimensions: [1, 3, 224, 224],
     };
-    this.outputDimensions = [1, 1000];
+    // TO Jiajia: 
+    // conv1's outputDimensions: [1,16,55,55];
+    // conv3's outputDimensions: [1,64,55,55];
+    // softmax's outputDimensions: [1, 1000]
+    this.outputDimensions = [1,64,55,55]; // conv3
   }
 
   async buildConv_(input, name, options = {}) {
@@ -29,7 +33,18 @@ export class SqueezeNetNchw {
     options.activation = this.builder_.relu();
     return this.builder_.conv2d(input, weights, options);
   }
-
+  async buildConv_debug(input, name, options = {}) {
+    const prefix = this.weightsUrl_ + 'squeezenet0_' + name;
+    const weightsName = prefix + '_weight.npy';
+    const weights = await buildConstantByNpy(this.builder_, weightsName);
+    const biasName = prefix + '_bias.npy';
+    const bias = await buildConstantByNpy(this.builder_, biasName);
+    options.bias = bias;
+    // TO Jiajia: 
+    // please comment below Line#45 for not using relu
+    options.activation = this.builder_.relu();
+    return this.builder_.conv2d(input, weights, options);
+  }
   async buildFire_(input, convName, conv1x1Name, conv3x3Name) {
     const conv = await this.buildConv_(input, convName);
     const conv1x1 = await this.buildConv_(conv, conv1x1Name);
@@ -37,7 +52,15 @@ export class SqueezeNetNchw {
         conv, conv3x3Name, {padding: [1, 1, 1, 1]});
     return this.builder_.concat([conv1x1, conv3x3], 1);
   }
-
+  async buildFire_debug(input, convName, conv1x1Name, conv3x3Name) {
+    const conv = await this.buildConv_(input, convName);
+    const conv1x1 = await this.buildConv_(conv, conv1x1Name);
+    const conv3x3 = await this.buildConv_debug(
+        conv, conv3x3Name, {padding: [1, 1, 1, 1]});
+    // TO Jiajia: 
+    // return conv; // conv is output of conv1 op, please modify Line#23 "this.outputDimensions = [1,16,55,55];
+    return conv3x3; // conv3x3 is output of conv3 op, please modify Line#23 "this.outputDimensions = [1,64,55,55]; 
+  }
   async load(contextOptions) {
     const context = navigator.ml.createContext(contextOptions);
     this.builder_ = new MLGraphBuilder(context);
@@ -46,6 +69,7 @@ export class SqueezeNetNchw {
     const conv0 = await this.buildConv_(data, 'conv0', {strides: [2, 2]});
     const pool0 = this.builder_.maxPool2d(
         conv0, {windowDimensions: [3, 3], strides: [2, 2]});
+    const debug_conv = await this.buildFire_debug(pool0, 'conv1', 'conv2', 'conv3');
     const fire0 = await this.buildFire_(pool0, 'conv1', 'conv2', 'conv3');
     const fire1 = await this.buildFire_(fire0, 'conv4', 'conv5', 'conv6');
     const pool1 = this.builder_.maxPool2d(
@@ -62,7 +86,9 @@ export class SqueezeNetNchw {
     const pool3 = this.builder_.averagePool2d(
         conv25, {windowDimensions: [13, 13], strides: [13, 13]});
     const reshape0 = this.builder_.reshape(pool3, [1, -1]);
-    return this.builder_.softmax(reshape0);
+    const softmax = this.builder_.softmax(reshape0);
+    // return softmax; // TO Jiajia: return softmax for whole model, need modify above Line#23 as "this.outputDimensions = [1, 1000]; 
+    return debug_conv; // TO Jiajia: curent return conv3, if return conv1, need modify above Line#61 and Line#62
   }
 
   async build(outputOperand) {

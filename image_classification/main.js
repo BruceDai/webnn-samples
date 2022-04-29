@@ -224,6 +224,15 @@ function constructNetObject(type) {
   return netObject[type];
 }
 
+let str = '';
+function download(c, f, ct) {
+  let a = document.createElement("a");
+  let file = new Blob([c], {type: ct});
+  a.href = URL.createObjectURL(file);
+  a.download = f;
+  a.click()
+}
+
 async function main() {
   try {
     if (modelName === '') return;
@@ -296,11 +305,19 @@ async function main() {
         console.log(`  median compute time: ${medianComputeTime} ms`);
       }
       console.log('outputBuffer: ', outputBuffer);
-      await ui.showProgressComponent('done', 'done', 'done');
-      ui.readyShowResultComponents();
-      drawInput(imgElement, 'inputCanvas');
-      await drawOutput(outputBuffer, labels);
-      showPerfResult(medianComputeTime);
+      // TO Jiajia:
+      // The Line#310 to Line#313 to save output data in TXT file 
+      for (let i = 0; i < outputBuffer.length; ++i) {
+        str = str + '\n' +`${outputBuffer[i]}`;
+      }
+      download(str, 'webgpu.txt', 'text/plain');
+      // TO Jiajia:
+      // uncomment below Line#314 to Line#318 for showing images classification result on UI
+      // await ui.showProgressComponent('done', 'done', 'done');
+      // ui.readyShowResultComponents();
+      // drawInput(imgElement, 'inputCanvas');
+      // await drawOutput(outputBuffer, labels);
+      // showPerfResult(medianComputeTime);
     } else if (inputType === 'camera') {
       await getMediaStream();
       camElement.srcObject = stream;
