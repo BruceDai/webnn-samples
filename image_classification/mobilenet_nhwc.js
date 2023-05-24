@@ -59,6 +59,7 @@ export class MobileNetV2Nhwc {
   }
 
   async load(contextOptions) {
+    console.log(`Create context with ${contextOptions.deviceType} options`)
     this.context_ = await navigator.ml.createContext(contextOptions);
     this.builder_ = new MLGraphBuilder(this.context_);
     const strides = [2, 2];
