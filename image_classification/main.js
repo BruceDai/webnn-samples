@@ -1,10 +1,5 @@
 'use strict';
 
-import {MobileNetV2Nchw} from './mobilenet_nchw.js';
-import {MobileNetV2Nhwc} from './mobilenet_nhwc.js';
-import {SqueezeNetNchw} from './squeezenet_nchw.js';
-import {SqueezeNetNhwc} from './squeezenet_nhwc.js';
-import {ResNet50V2Nchw} from './resnet50v2_nchw.js';
 import {ResNet50V2Nhwc} from './resnet50v2_nhwc.js';
 import * as ui from '../common/ui.js';
 import * as utils from '../common/utils.js';
@@ -15,7 +10,7 @@ const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
 const camElement = document.getElementById('feedMediaElement');
 let modelName = '';
-let layout = 'nchw';
+let layout = 'nhwc';
 let instanceType = modelName + layout;
 let rafReq;
 let isFirstTimeLoad = true;
@@ -54,7 +49,7 @@ $('#backendBtns .btn').on('change', async (e) => {
   await main();
 });
 
-$('#modelBtns .btn').on('change', async (e) => {
+$('#resnet50').click(async (e) => {
   modelName = $(e.target).attr('id');
   if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
   await main();
@@ -183,11 +178,6 @@ function showPerfResult(medianComputeTime = undefined) {
 
 function constructNetObject(type) {
   const netObject = {
-    'mobilenetnchw': new MobileNetV2Nchw(),
-    'mobilenetnhwc': new MobileNetV2Nhwc(),
-    'squeezenetnchw': new SqueezeNetNchw(),
-    'squeezenetnhwc': new SqueezeNetNhwc(),
-    'resnet50nchw': new ResNet50V2Nchw(),
     'resnet50nhwc': new ResNet50V2Nhwc(),
   };
 

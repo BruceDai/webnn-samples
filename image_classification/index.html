@@ -31,12 +31,6 @@
           </div>
           <div class="col-md-auto">
             <div class="btn-group-toggle" data-toggle="buttons" id="backendBtns">
-              <label class="btn btn-outline-info custom" name="polyfill">
-                <input type="radio" name="backend" id="polyfill_cpu" autocomplete="off">Wasm (CPU)
-              </label>
-              <label class="btn btn-outline-info custom" name="polyfill">
-                <input type="radio" name="backend" id="polyfill_gpu" autocomplete="off">WebGL (GPU)
-              </label>
               <label class="btn btn-outline-info custom" name="webnn">
                 <input type="radio" name="backend" id="webnn_cpu" autocomplete="off">WebNN (CPU)
               </label>
@@ -52,11 +46,8 @@
           </div>
           <div class="col-md-auto">
             <div class="btn-group-toggle" data-toggle="buttons" id="layoutBtns">
-              <label class="btn btn-outline-info active" id='nchw-label'>
-                <input type="radio" name="layout" id="nchw" autocomplete="off" checked>NCHW
-              </label>
               <label class="btn btn-outline-info btn-sm">
-                <input type="radio" name="layout" id="nhwc" autocomplete="off">NHWC
+                <input type="radio" name="layout" id="nhwc" autocomplete="off" checked>NHWC
               </label>
             </div>
           </div>
@@ -68,13 +59,7 @@
           <div class="col-md-auto">
             <div class="btn-group-toggle" data-toggle="buttons" id="modelBtns">
               <label class="btn btn-outline-info">
-                <input type="radio" name="model" id="mobilenet" autocomplete="off">MobileNet V2
-              </label>
-              <label class="btn btn-outline-info">
-                <input type="radio" name="model" id="squeezenet" autocomplete="off">SqueezeNet
-              </label>
-              <label class="btn btn-outline-info">
-                <input type="radio" name="model" id="resnet50" autocomplete="off">ResNet V2 50
+                <input type="radio" name="model" id="resnet50" autocomplete="off" checked>ResNet V2 50
               </label>
             </div>
           </div>
