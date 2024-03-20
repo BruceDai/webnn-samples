@@ -8,6 +8,7 @@ export class RNNoise {
     this.batchSize_ = batchSize;
     this.frames_ = frames;
     this.model_ = null;
+    this.context_ = null;
     this.graph_ = null;
     this.builder_ = null;
     this.featureSize = 42;
@@ -20,8 +21,8 @@ export class RNNoise {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.builder_ = new MLGraphBuilder(this.context_);
     // Create constants by loading pre-trained data from .npy files.
     const inputDenseKernel0 = await buildConstantByNpy(this.builder_,
         this.baseUrl_ + 'input_dense_kernel_0.npy');
@@ -50,20 +51,25 @@ export class RNNoise {
     const denoiseOutputBias0 = await buildConstantByNpy(this.builder_,
         this.baseUrl_ + 'denoise_output_bias_0.npy');
     // Build up the network.
-    const input = this.builder_.input(
-        'input', {type: 'float32', dimensions: [this.batchSize_,
-          this.frames_, this.featureSize]});
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: [this.batchSize_, this.frames_, this.featureSize],
+    });
     const inputDense0 = this.builder_.matmul(input, inputDenseKernel0);
     const biasedTensorName2 = this.builder_.add(inputDense0, inputDenseBias0);
     const inputDenseTanh0 = this.builder_.tanh(biasedTensorName2);
     const vadGruX = this.builder_.transpose(
         inputDenseTanh0, {permutation: [1, 0, 2]});
     const vadGruB = this.builder_.slice(
-        vadGruBData, [0], [3 * this.vadGruHiddenSize], {axes: [1]});
+        vadGruBData, [0, 0], [1, 3 * this.vadGruHiddenSize]);
     const vadGruRB = this.builder_.slice(
-        vadGruBData, [3 * this.vadGruHiddenSize], [-1], {axes: [1]});
+        vadGruBData,
+        [0, 3 * this.vadGruHiddenSize],
+        [1, 3 * this.vadGruHiddenSize]);
     const vadGruInitialH = this.builder_.input('vadGruInitialH', {
       type: 'float32',
+      dataType: 'float32',
       dimensions: [1, this.batchSize_, this.vadGruHiddenSize],
     });
     const [vadGruYH, vadGruY] = this.builder_.gru(vadGruX,
@@ -78,17 +84,20 @@ export class RNNoise {
     const vadGruYTransposed = this.builder_.transpose(
         vadGruY, {permutation: [2, 0, 1, 3]});
     const vadGruTranspose1 = this.builder_.reshape(
-        vadGruYTransposed, [-1, this.frames_, this.vadGruHiddenSize]);
+        vadGruYTransposed, [1, this.frames_, this.vadGruHiddenSize]);
     const concatenate1 = this.builder_.concat(
         [inputDenseTanh0, vadGruTranspose1, input], 2);
     const noiseGruX = this.builder_.transpose(
         concatenate1, {permutation: [1, 0, 2]});
     const noiseGruB = this.builder_.slice(
-        noiseGruBData, [0], [3 * this.noiseGruHiddenSize], {axes: [1]});
+        noiseGruBData, [0, 0], [1, 3 * this.noiseGruHiddenSize]);
     const noiseGruRB = this.builder_.slice(
-        noiseGruBData, [3 * this.noiseGruHiddenSize], [-1], {axes: [1]});
-    const noiseGruInitialH = this.builder_.input( 'noiseGruInitialH', {
+        noiseGruBData,
+        [0, 3 * this.noiseGruHiddenSize],
+        [1, 3 * this.noiseGruHiddenSize]);
+    const noiseGruInitialH = this.builder_.input('noiseGruInitialH', {
       type: 'float32',
+      dataType: 'float32',
       dimensions: [1, this.batchSize_, this.noiseGruHiddenSize],
     });
     const [noiseGruYH, noiseGruY] = this.builder_.gru(noiseGruX,
@@ -103,17 +112,20 @@ export class RNNoise {
     const noiseGruYTransposed = this.builder_.transpose(
         noiseGruY, {permutation: [2, 0, 1, 3]});
     const noiseGruTranspose1 = this.builder_.reshape(
-        noiseGruYTransposed, [-1, this.frames_, this.noiseGruHiddenSize]);
+        noiseGruYTransposed, [1, this.frames_, this.noiseGruHiddenSize]);
     const concatenate2 = this.builder_.concat(
         [vadGruTranspose1, noiseGruTranspose1, input], 2);
     const denoiseGruX = this.builder_.transpose(
         concatenate2, {permutation: [1, 0, 2]});
     const denoiseGruB = this.builder_.slice(
-        denoiseGruBData, [0], [3 * this.denoiseGruHiddenSize], {axes: [1]});
+        denoiseGruBData, [0, 0], [1, 3 * this.denoiseGruHiddenSize]);
     const denoiseGruRB = this.builder_.slice(
-        denoiseGruBData, [3 * this.denoiseGruHiddenSize], [-1], {axes: [1]});
+        denoiseGruBData,
+        [0, 3 * this.denoiseGruHiddenSize],
+        [1, 3 * this.denoiseGruHiddenSize]);
     const denoiseGruInitialH = this.builder_.input('denoiseGruInitialH', {
       type: 'float32',
+      dataType: 'float32',
       dimensions: [1, this.batchSize_, this.denoiseGruHiddenSize],
     });
     const [denoiseGruYH, denoiseGruY] = this.builder_.gru(denoiseGruX,
@@ -128,7 +140,7 @@ export class RNNoise {
     const denoiseGruYTransposed = this.builder_.transpose(
         denoiseGruY, {permutation: [2, 0, 1, 3]});
     const denoiseGruTranspose1 = this.builder_.reshape(
-        denoiseGruYTransposed, [-1, this.frames_, this.denoiseGruHiddenSize]);
+        denoiseGruYTransposed, [1, this.frames_, this.denoiseGruHiddenSize]);
     const denoiseOutput0 = this.builder_.matmul(
         denoiseGruTranspose1, denoiseOutputKernel0);
     const biasedTensorName = this.builder_.add(
@@ -142,7 +154,8 @@ export class RNNoise {
     this.graph_ = await this.builder_.build(outputOperand);
   }
 
-  async computeAsync(inputs, outputs) {
-    await this.graph_.computeAsync(inputs, outputs);
+  async compute(inputs, outputs) {
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results.outputs;
   }
 }

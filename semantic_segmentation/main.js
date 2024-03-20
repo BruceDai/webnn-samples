@@ -10,8 +10,8 @@ const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
 const camElement = document.getElementById('feedMediaElement');
 const outputCanvas = document.getElementById('outputCanvas');
-let modelName ='deeplabv3mnv2';
-let layout = 'nchw';
+let modelName ='';
+let layout = 'nhwc';
 let instanceType = modelName + layout;
 let rafReq;
 let isFirstTimeLoad = true;
@@ -26,12 +26,19 @@ let inputOptions;
 let outputBuffer;
 let renderer;
 let hoverPos = null;
-let devicePreference = 'gpu';
-let lastDevicePreference = '';
+let deviceType = '';
+let lastdeviceType = '';
+let backend = '';
+let lastBackend = '';
 const disabledSelectors = ['#tabs > li', '.btn'];
 
-$(document).ready(() => {
+$(document).ready(async () => {
   $('.icdisplay').hide();
+  if (await utils.isWebNN()) {
+    $('#webnn_cpu').click();
+  } else {
+    $('#polyfill_cpu').click();
+  }
 });
 
 $(window).on('load', () => {
@@ -40,28 +47,33 @@ $(window).on('load', () => {
   loadRenderUI();
 });
 
-$('#deviceBtns .btn').on('change', async (e) => {
-  devicePreference = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+$('#backendBtns .btn').on('change', async (e) => {
+  if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
+  if ($(e.target).attr('id').indexOf('cpu') != -1) {
+    layout = 'nhwc';
+  } else if (($(e.target).attr('id').indexOf('gpu') != -1)) {
+    layout = 'nchw';
+  } else {
+    throw new Error('Unknown backend');
+  }
   await main();
 });
 
 $('#modelBtns .btn').on('change', async (e) => {
   modelName = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+  if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
   await main();
 });
 
-$('#layoutBtns .btn').on('change', async (e) => {
-  layout = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
-  await main();
-});
+// $('#layoutBtns .btn').on('change', async (e) => {
+//   layout = $(e.target).attr('id');
+//   if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
+//   await main();
+// });
 
 // Click trigger to do inference with <img> element
 $('#img').click(async () => {
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
-  if (stream !== null) stopCamera();
+  if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
   inputType = 'image';
   $('#pickimage').show();
   $('.shoulddisplay').hide();
@@ -206,24 +218,11 @@ async function fetchLabels(url) {
   return data.split('\n');
 }
 
-async function getMediaStream() {
-  // Support 'user' facing mode at present
-  const constraints = {audio: false, video: {facingMode: 'user'}};
-  stream = await navigator.mediaDevices.getUserMedia(constraints);
-}
-
-function stopCamera() {
-  stream.getTracks().forEach((track) => {
-    if (track.readyState === 'live' && track.kind === 'video') {
-      track.stop();
-    }
-  });
-}
-
 /**
  * This method is used to render live camera tab.
  */
 async function renderCamStream() {
+  if (!stream.active) return;
   // If the video element's readyState is 0, the video's width and height are 0.
   // So check the readState here to make sure it is greater than 0.
   if (camElement.readyState === 0) {
@@ -234,9 +233,10 @@ async function renderCamStream() {
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  await netInstance.computeAsync(inputBuffer, outputBuffer);
+  const results = await netInstance.compute(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
+  outputBuffer = results.outputs.output;
   showPerfResult();
   await drawOutput(inputCanvas);
   $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
@@ -246,13 +246,14 @@ async function renderCamStream() {
 async function drawOutput(srcElement) {
   // TODO: move 'argMax' operation to graph once it is supported in WebNN spec.
   // https://github.com/webmachinelearning/webnn/issues/184
-  const argMaxResult = tf.tidy(() => {
+  const [argMaxBuffer, outputShape] = tf.tidy(() => {
     const a = tf.tensor(outputBuffer, netInstance.outputDimensions, 'float32');
     let axis = 3;
     if (layout === 'nchw') {
       axis = 1;
     }
-    return tf.argMax(a, axis);
+    const b = tf.argMax(a, axis);
+    return [b.dataSync(), b.shape];
   });
 
   const width = inputOptions.inputDimensions[2];
@@ -263,8 +264,8 @@ async function drawOutput(srcElement) {
   const scaledHeight = Math.floor(imHeight / resizeRatio);
 
   const segMap = {
-    data: await argMaxResult.data(),
-    outputShape: argMaxResult.shape,
+    data: argMaxBuffer,
+    outputShape: outputShape,
     labels: labels,
   };
 
@@ -296,18 +297,24 @@ function constructNetObject(type) {
 
 export async function main() {
   try {
+    if (modelName === '') return;
+    [backend, deviceType] =
+        $('input[name="backend"]:checked').attr('id').split('_');
     ui.handleClick(disabledSelectors, true);
+    if (isFirstTimeLoad) $('#hint').hide();
     let start;
-    const [numRuns, powerPreference] = utils.getUrlParams();
+    const [numRuns, powerPreference, numThreads] = utils.getUrlParams();
 
     // Only do load() and build() when model first time loads,
-    // there's new model choosed, and device backend changed
+    // there's new model choosed, backend changed or device changed
     if (isFirstTimeLoad || instanceType !== modelName + layout ||
-      lastDevicePreference != devicePreference) {
-      if (lastDevicePreference != devicePreference) {
-        // Set polyfill backend
-        await utils.setPolyfillBackend(devicePreference);
-        lastDevicePreference = devicePreference;
+        lastdeviceType != deviceType || lastBackend != backend) {
+      if (lastdeviceType != deviceType || lastBackend != backend) {
+        // Set backend and device
+        await utils.setBackend(backend, deviceType);
+        lastdeviceType = lastdeviceType != deviceType ?
+                              deviceType : lastdeviceType;
+        lastBackend = lastBackend != backend ? backend : lastBackend;
       }
       if (netInstance !== null) {
         // Call dispose() to and avoid memory leak
@@ -324,9 +331,12 @@ export async function main() {
       // UI shows model loading progress
       await ui.showProgressComponent('current', 'pending', 'pending');
       console.log('- Loading weights... ');
-      const contextOptions = {devicePreference};
+      const contextOptions = {deviceType};
       if (powerPreference) {
         contextOptions['powerPreference'] = powerPreference;
+      }
+      if (numThreads) {
+        contextOptions['numThreads'] = numThreads;
       }
       start = performance.now();
       const outputOperand = await netInstance.load(contextOptions);
@@ -347,13 +357,14 @@ export async function main() {
       console.log('- Computing... ');
       const computeTimeArray = [];
       let medianComputeTime;
-      if (numRuns > 1) {
-        // Do warm up
-        await netInstance.computeAsync(inputBuffer, outputBuffer);
-      }
+
+      // Do warm up
+      let results = await netInstance.compute(inputBuffer, outputBuffer);
+
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await netInstance.computeAsync(inputBuffer, outputBuffer);
+        results = await netInstance.compute(
+            results.inputs.input, results.outputs.output);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
@@ -363,6 +374,7 @@ export async function main() {
         medianComputeTime = medianComputeTime.toFixed(2);
         console.log(`  median compute time: ${medianComputeTime} ms`);
       }
+      outputBuffer = results.outputs.output;
       console.log('output: ', outputBuffer);
       await ui.showProgressComponent('done', 'done', 'done');
       $('#fps').hide();
@@ -370,7 +382,7 @@ export async function main() {
       await drawOutput(imgElement);
       showPerfResult(medianComputeTime);
     } else if (inputType === 'camera') {
-      await getMediaStream();
+      stream = await utils.getMediaStream();
       camElement.srcObject = stream;
       camElement.onloadeddata = await renderCamStream();
       await ui.showProgressComponent('done', 'done', 'done');

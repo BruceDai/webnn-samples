@@ -1,13 +1,15 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, weightsOrigin} from '../common/utils.js';
 
 // SqueezeNet 1.1 model with 'nchw' input layout
 export class SqueezeNetNchw {
   constructor() {
+    this.context_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/squeezenet1.1_nchw/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/squeezenet1.1_nchw/weights/';
     this.inputOptions = {
       mean: [0.485, 0.456, 0.406],
       std: [0.229, 0.224, 0.225],
@@ -39,10 +41,13 @@ export class SqueezeNetNchw {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
-    const data = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.builder_ = new MLGraphBuilder(this.context_);
+    const data = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const conv0 = await this.buildConv_(data, 'conv0', {strides: [2, 2]});
     const pool0 = this.builder_.maxPool2d(
         conv0, {windowDimensions: [3, 3], strides: [2, 2]});
@@ -61,7 +66,7 @@ export class SqueezeNetNchw {
     const conv25 = await this.buildConv_(fire7, 'conv25');
     const pool3 = this.builder_.averagePool2d(
         conv25, {windowDimensions: [13, 13], strides: [13, 13]});
-    const reshape0 = this.builder_.reshape(pool3, [1, -1]);
+    const reshape0 = this.builder_.reshape(pool3, [1, 1000]);
     return this.builder_.softmax(reshape0);
   }
 
@@ -77,9 +82,10 @@ export class SqueezeNetNchw {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

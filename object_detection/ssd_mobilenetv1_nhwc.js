@@ -1,14 +1,17 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, computePadding2DForAutoPad, weightsOrigin} from '../common/utils.js';
 
 // SSD MobileNet V1 model with 'nhwc' layout, trained on the COCO dataset.
 export class SsdMobilenetV1Nhwc {
   constructor() {
+    this.context_ = null;
+    this.deviceType_ = null;
     this.model_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/ssd_mobilenetv1_nhwc/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/ssd_mobilenetv1_nhwc/weights/';
     this.inputOptions = {
       inputLayout: 'nhwc',
       labelUrl: './labels/coco_classes.txt',
@@ -57,30 +60,44 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     if (options !== undefined) {
       options.inputLayout = 'nhwc';
       options.filterLayout = 'ohwi';
-      options.autoPad = 'same-upper';
     } else {
       options = {
         inputLayout: 'nhwc',
         filterLayout: 'ohwi',
-        autoPad: 'same-upper',
       };
     }
     if (nameArray[0].includes('depthwise')) {
       options.filterLayout = 'ihwo';
     }
     options.bias = bias;
+    options.padding = computePadding2DForAutoPad(
+        /* nhwc */[input.shape()[1], input.shape()[2]],
+        /* ohwi or ihwo */[weights.shape()[1], weights.shape()[2]],
+        options.strides, options.dilations, 'same-upper');
     if (relu6) {
-      // implement `relu6` by `clamp` of  WebNN API
-      options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      // TODO: Set clamp activation to options once it's supported in
+      // WebNN DML backend.
+      // Implement `clip` by `clamp` of  WebNN API
+      if (this.deviceType_ == 'gpu') {
+        return this.builder_.clamp(
+            this.builder_.conv2d(input, weights, options),
+            {minValue: 0, maxValue: 6});
+      } else {
+        options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      }
     }
     return this.builder_.conv2d(input, weights, options);
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
-    const input = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.deviceType_ = contextOptions.deviceType;
+    this.builder_ = new MLGraphBuilder(this.context_);
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const strides = [2, 2];
     const conv0 = await this.buildConv_(
         input, ['', '0', '', '165__cf__168'], true, {strides});
@@ -191,8 +208,11 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     const conv27 = await this.buildConv_(
         conv21, ['BoxEncoding', '5', '', '167__cf__170'], false);
     const reshape5 = this.builder_.reshape(conv27, [1, 6, 1, 4]);
+    // XNNPACK doesn't support concat inputs size > 4.
+    const concatReshape0123 = this.builder_.concat(
+        [reshape0, reshape1, reshape2, reshape3], 1);
     const concat0 = this.builder_.concat(
-        [reshape0, reshape1, reshape2, reshape3, reshape4, reshape5], 1);
+        [concatReshape0123, reshape4, reshape5], 1);
 
     // Second concatenation
     const conv28 = await this.buildConv_(
@@ -213,8 +233,11 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     const conv33 = await this.buildConv_(
         conv21, ['Class', '5', '', '41__cf__44'], false);
     const reshape11 = this.builder_.reshape(conv33, [1, 6, 91]);
+    // XNNPACK doesn't support concat inputs size > 4.
+    const concatReshape6789 = this.builder_.concat(
+        [reshape6, reshape7, reshape8, reshape9], 1);
     const concat1 = this.builder_.concat(
-        [reshape6, reshape7, reshape8, reshape9, reshape10, reshape11], 1);
+        [concatReshape6789, reshape10, reshape11], 1);
 
     return {'boxes': concat0, 'scores': concat1};
   }
@@ -231,8 +254,9 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     }
   }
 
-  async computeAsync(inputBuffer, outputs) {
+  async compute(inputBuffer, outputs) {
     const inputs = {'input': inputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

@@ -1,16 +1,20 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, computePadding2DForAutoPad, weightsOrigin} from '../common/utils.js';
 
 // SSD MobileNet V1 model with 'nchw' layout, trained on the COCO dataset.
 export class SsdMobilenetV1Nchw {
   constructor() {
+    this.context_ = null;
+    this.deviceType_ = null;
     this.model_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/ssd_mobilenetv1_nchw/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/ssd_mobilenetv1_nchw/weights/';
     // Shares the same bias files with 'nhwc' layout
-    this.biasUrl_ = '../test-data/models/ssd_mobilenetv1_nhwc/weights/';
+    this.biasUrl_ = weightsOrigin() +
+      '/test-data/models/ssd_mobilenetv1_nhwc/weights/';
     this.inputOptions = {
       inputLayout: 'nchw',
       labelUrl: './labels/coco_classes.txt',
@@ -56,88 +60,103 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     const weights = await buildConstantByNpy(this.builder_, weightsName);
     const biasName = this.biasUrl_ + prefix + biasSuffix;
     const bias = await buildConstantByNpy(this.builder_, biasName);
-    options.autoPad = 'same-upper';
+    options.padding = computePadding2DForAutoPad(
+        /* nchw */[input.shape()[2], input.shape()[3]],
+        /* oihw */[weights.shape()[2], weights.shape()[3]],
+        options.strides, options.dilations, 'same-upper');
     options.bias = bias;
     if (relu6) {
-      // implement `relu6` by `clamp` of  WebNN API
-      options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      // TODO: Set clamp activation to options once it's supported in
+      // WebNN DML backend.
+      // Implement `clip` by `clamp` of  WebNN API
+      if (this.deviceType_ == 'gpu') {
+        return this.builder_.clamp(
+            this.builder_.conv2d(input, weights, options),
+            {minValue: 0, maxValue: 6});
+      } else {
+        options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      }
     }
     return this.builder_.conv2d(input, weights, options);
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
-    const input = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.deviceType_ = contextOptions.deviceType;
+    this.builder_ = new MLGraphBuilder(this.context_);
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const strides = [2, 2];
     const conv0 = await this.buildConv_(
         input, ['', '0', '', '165__cf__168'],
-        true, {strides, paddings: [0, 0, 1, 1]});
+        true, {strides});
     const dwise0 = await this.buildConv_(
         conv0, ['depthwise', '1', '161__cf__164', '162__cf__165'],
-        true, {groups: 32, paddings: [1, 1, 1, 1]});
+        true, {groups: 32});
     const conv1 = await this.buildConv_(
         dwise0, ['pointwise', '1', '', '159__cf__162']);
     const dwise1 = await this.buildConv_(
         conv1, ['depthwise', '2', '155__cf__158', '156__cf__159'],
-        true, {strides, groups: 64, paddings: [0, 0, 1, 1]});
+        true, {strides, groups: 64});
     const conv2 = await this.buildConv_(
         dwise1, ['pointwise', '2', '', '153__cf__156']);
     const dwise2 = await this.buildConv_(
         conv2, ['depthwise', '3', '149__cf__152', '150__cf__153'],
-        true, {groups: 128, paddings: [1, 1, 1, 1]});
+        true, {groups: 128});
     const conv3 = await this.buildConv_(
         dwise2, ['pointwise', '3', '', '147__cf__150']);
     const dwise3 = await this.buildConv_(
         conv3, ['depthwise', '4', '143__cf__146', '144__cf__147'],
-        true, {strides, groups: 128, paddings: [1, 1, 1, 1]});
+        true, {strides, groups: 128});
     const conv4 = await this.buildConv_(
         dwise3, ['pointwise', '4', '', '141__cf__144']);
     const dwise4 = await this.buildConv_(
         conv4, ['depthwise', '5', '137__cf__140', '138__cf__141'],
-        true, {groups: 256, paddings: [1, 1, 1, 1]});
+        true, {groups: 256});
     const conv5 = await this.buildConv_(
         dwise4, ['pointwise', '5', '', '135__cf__138']);
     const dwise5 = await this.buildConv_(
         conv5, ['depthwise', '6', '131__cf__134', '132__cf__135'],
-        true, {strides, groups: 256, paddings: [0, 0, 1, 1]});
+        true, {strides, groups: 256});
     const conv6 = await this.buildConv_(
         dwise5, ['pointwise', '6', '', '129__cf__132']);
     const dwise6 = await this.buildConv_(
         conv6, ['depthwise', '7', '125__cf__128', '126__cf__129'],
-        true, {groups: 512, paddings: [1, 1, 1, 1]});
+        true, {groups: 512});
     const conv7 = await this.buildConv_(
         dwise6, ['pointwise', '7', '', '123__cf__126']);
     const dwise7 = await this.buildConv_(
         conv7, ['depthwise', '8', '119__cf__122', '120__cf__123'],
-        true, {groups: 512, paddings: [1, 1, 1, 1]});
+        true, {groups: 512});
     const conv8 = await this.buildConv_(
         dwise7, ['pointwise', '8', '', '117__cf__120']);
     const dwise8 = await this.buildConv_(
         conv8, ['depthwise', '9', '113__cf__116', '114__cf__117'],
-        true, {groups: 512, paddings: [1, 1, 1, 1]});
+        true, {groups: 512});
     const conv9 = await this.buildConv_(
         dwise8, ['pointwise', '9', '', '111__cf__114']);
     const dwise9 = await this.buildConv_(
         conv9, ['depthwise', '10', '107__cf__110', '108__cf__111'],
-        true, {groups: 512, paddings: [1, 1, 1, 1]});
+        true, {groups: 512});
     const conv10 = await this.buildConv_(
         dwise9, ['pointwise', '10', '', '105__cf__108']);
     const dwise10 = await this.buildConv_(
         conv10, ['depthwise', '11', '101__cf__104', '102__cf__105'],
-        true, {groups: 512, paddings: [1, 1, 1, 1]});
+        true, {groups: 512});
     const conv11 = await this.buildConv_(
         dwise10, ['pointwise', '11', '', '99__cf__102']);
 
     const dwise11 = await this.buildConv_(
         conv11, ['depthwise', '12', '95__cf__98', '96__cf__99'],
-        true, {strides, groups: 512, paddings: [1, 1, 1, 1]});
+        true, {strides, groups: 512});
     const conv12 = await this.buildConv_(
         dwise11, ['pointwise', '12', '', '93__cf__96']);
     const dwise12 = await this.buildConv_(
         conv12, ['depthwise', '13', '89__cf__92', '90__cf__93'],
-        true, {groups: 1024, paddings: [1, 1, 1, 1]});
+        true, {groups: 1024});
     const conv13 = await this.buildConv_(
         dwise12, ['pointwise', '13', '', '87__cf__90']);
 
@@ -145,22 +164,22 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
         conv13, ['pointwise_1', '2_1x1_256', '', '84__cf__87']);
     const conv15 = await this.buildConv_(
         conv14, ['pointwise_2', '2_3x3_s2_512', '', '81__cf__84'],
-        true, {strides, paddings: [0, 0, 1, 1]});
+        true, {strides});
     const conv16 = await this.buildConv_(
         conv15, ['pointwise_1', '3_1x1_128', '', '78__cf__81']);
     const conv17 = await this.buildConv_(
         conv16, ['pointwise_2', '3_3x3_s2_256', '', '75__cf__78'],
-        true, {strides, paddings: [1, 1, 1, 1]});
+        true, {strides});
     const conv18 = await this.buildConv_(
         conv17, ['pointwise_1', '4_1x1_128', '', '72__cf__75']);
     const conv19 = await this.buildConv_(
         conv18, ['pointwise_2', '4_3x3_s2_256', '', '69__cf__72'],
-        true, {strides, paddings: [1, 1, 1, 1]});
+        true, {strides});
     const conv20 = await this.buildConv_(
         conv19, ['pointwise_1', '5_1x1_64', '', '66__cf__69']);
     const conv21 = await this.buildConv_(
         conv20, ['pointwise_2', '5_3x3_s2_128', '', '63__cf__66'],
-        true, {strides, paddings: [0, 0, 1, 1]});
+        true, {strides});
 
     // First concatenation
     const conv22 = await this.buildConv_(
@@ -245,8 +264,9 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     }
   }
 
-  async computeAsync(inputBuffer, outputs) {
+  async compute(inputBuffer, outputs) {
     const inputs = {'input': inputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

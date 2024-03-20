@@ -1,6 +1,6 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, computePadding2DForAutoPad, weightsOrigin} from '../common/utils.js';
 
 const autoPad = 'same-upper';
 const strides = [2, 2];
@@ -9,9 +9,11 @@ const layout = 'nhwc';
 // ResNet 50 V2 model with 'nhwc' layout
 export class ResNet50V2Nhwc {
   constructor() {
+    this.context_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/resnet50v2_nhwc/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/resnet50v2_nhwc/weights/';
     this.inputOptions = {
       mean: [127.5, 127.5, 127.5],
       std: [127.5, 127.5, 127.5],
@@ -49,6 +51,14 @@ export class ResNet50V2Nhwc {
     if (relu) {
       options.activation = this.builder_.relu();
     }
+    // WebNN spec drops autoPad support, compute the explicit padding instead.
+    if (options.autoPad == 'same-upper') {
+      options.padding =
+        computePadding2DForAutoPad(
+            /* nwhc */[input.shape()[1], input.shape()[2]],
+            /* ohwi */[weights.shape()[1], weights.shape()[2]],
+            options.strides, options.dilations, options.autoPad);
+    }
     return this.builder_.conv2d(input, weights, options);
   }
 
@@ -82,12 +92,9 @@ export class ResNet50V2Nhwc {
     }
     if (!downsample && shortcut) {
       residual = this.builder_.maxPool2d(
-          input, {windowDimensions: [1, 1], strides, layout, autoPad});
-      const padding = this.builder_.constant(
-          {type: 'int32', dimensions: [4, 2]},
-          new Int32Array([0, 0, 1, 1, 1, 1, 0, 0]));
-      const pad = this.builder_.pad(conv1, padding);
-      conv2 = await this.buildConv_(pad, nameIndices.concat(['2']), {strides});
+          input, {windowDimensions: [2, 2], strides, layout, autoPad});
+      conv2 = await this.buildConv_(
+          conv1, nameIndices.concat(['2']), {strides, padding: [1, 1, 1, 1]});
     } else {
       conv2 = await this.buildConv_(
           conv1, nameIndices.concat(['2']), {autoPad});
@@ -98,18 +105,22 @@ export class ResNet50V2Nhwc {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
-    const padding = this.builder_.constant(
-        {type: 'int32', dimensions: [4, 2]},
-        new Int32Array([0, 0, 3, 3, 3, 3, 0, 0]));
-
-    const input = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
-    const pad = this.builder_.pad(input, padding);
-    const conv1 = await this.buildConv_(pad, ['', '', '1'], {strides}, false);
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.builder_ = new MLGraphBuilder(this.context_);
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
+    const conv1 = await this.buildConv_(
+        input, ['', '', '1'], {strides, padding: [3, 3, 3, 3]}, false);
+    const windowDimensions = [3, 3];
     const pool = this.builder_.maxPool2d(
-        conv1, {windowDimensions: [3, 3], strides, layout, autoPad});
+        conv1, {windowDimensions, strides, layout,
+          padding: computePadding2DForAutoPad(
+              /* nhwc */ [conv1.shape()[1], conv1.shape()[2]],
+              windowDimensions, strides, /* dilations */ undefined,
+              'same-upper')});
     // Block 1
     const bottleneck1 = await this.buildBottleneckV2_(pool, ['1', '1'], true);
     const bottleneck2 = await this.buildBottleneckV2_(
@@ -154,11 +165,10 @@ export class ResNet50V2Nhwc {
 
     const fusedBn =
         await this.buildFusedBatchNorm_(bottleneck13, ['postnorm']);
-    const mean = this.builder_.reduceMean(
-        fusedBn, {keepDimensions: true, axes: [1, 2]});
+    const mean = this.builder_.averagePool2d(fusedBn, {layout});
     const conv2 = await this.buildConv_(
         mean, ['', '', 'logits'], {autoPad}, false);
-    const reshape = this.builder_.reshape(conv2, [1, -1]);
+    const reshape = this.builder_.reshape(conv2, [1, 1001]);
     return this.builder_.softmax(reshape);
   }
 
@@ -174,9 +184,10 @@ export class ResNet50V2Nhwc {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

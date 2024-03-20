@@ -1,15 +1,18 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, computePadding2DForAutoPad, weightsOrigin} from '../common/utils.js';
 
 /* eslint max-len: ["error", {"code": 120}] */
 
 // MobileNet V2 model with 'nhwc' input layout
 export class MobileNetV2Nhwc {
   constructor() {
+    this.context_ = null;
+    this.deviceType_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/mobilenetv2_nhwc/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/mobilenetv2_nhwc/weights/';
     this.inputOptions = {
       mean: [127.5, 127.5, 127.5],
       std: [127.5, 127.5, 127.5],
@@ -27,11 +30,25 @@ export class MobileNetV2Nhwc {
     const bias = await buildConstantByNpy(this.builder_, biasName);
     options.inputLayout = 'nhwc';
     options.bias = bias;
+    // WebNN spec drops autoPad support, compute the explicit padding instead.
+    if (options.autoPad == 'same-upper') {
+      options.padding =
+        computePadding2DForAutoPad(
+            /* nwhc */[input.shape()[1], input.shape()[2]],
+            /* ohwi or ihwo */[weights.shape()[1], weights.shape()[2]],
+            options.strides, options.dilations, options.autoPad);
+    }
     if (relu6) {
-      // `relu6` in TFLite equals to `clamp` in WebNN API
-      options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
-    } else {
-      options.activation = undefined;
+      // TODO: Set clamp activation to options once it's supported in
+      // WebNN DML backend.
+      // Implement `clip` by `clamp` of  WebNN API
+      if (this.deviceType_ == 'gpu') {
+        return this.builder_.clamp(
+            this.builder_.conv2d(input, weights, options),
+            {minValue: 0, maxValue: 6});
+      } else {
+        options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      }
     }
     return this.builder_.conv2d(input, weights, options);
   }
@@ -42,14 +59,13 @@ export class MobileNetV2Nhwc {
 
     dwiseOptions.autoPad = autoPad;
     dwiseOptions.filterLayout = 'ihwo';
-    const convOptions = {autoPad, filterLayout: 'ohwi'};
 
     const conv1x1Relu6 = await this.buildConv_(
-        input, weightsNameArray[0], `${biasPrefix}_expand_Conv2D`, true, convOptions);
+        input, weightsNameArray[0], `${biasPrefix}_expand_Conv2D`, true, {autoPad, filterLayout: 'ohwi'});
     const dwise3x3Relu6 = await this.buildConv_(
         conv1x1Relu6, weightsNameArray[1], `${biasPrefix}_depthwise_depthwise`, true, dwiseOptions);
     const conv1x1Linear = await this.buildConv_(
-        dwise3x3Relu6, weightsNameArray[2], `${biasPrefix}_project_Conv2D`, false, convOptions);
+        dwise3x3Relu6, weightsNameArray[2], `${biasPrefix}_project_Conv2D`, false, {autoPad, filterLayout: 'ohwi'});
 
     if (shortcut) {
       return this.builder_.add(input, conv1x1Linear);
@@ -58,13 +74,17 @@ export class MobileNetV2Nhwc {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.deviceType_ = contextOptions.deviceType;
+    this.builder_ = new MLGraphBuilder(this.context_);
     const strides = [2, 2];
     const autoPad = 'same-upper';
     const filterLayout = 'ohwi';
-    const input = this.builder_.input(
-        'input', {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const conv0 = await this.buildConv_(
         input, '90', 'Conv_Conv2D', true, {strides, autoPad, filterLayout});
     const conv1 = await this.buildConv_(
@@ -110,7 +130,7 @@ export class MobileNetV2Nhwc {
         conv3, {windowDimensions: [7, 7], layout: 'nhwc'});
     const conv4 = await this.buildConv_(
         averagePool2d, '222', 'Logits_Conv2d_1c_1x1_Conv2D', false, {autoPad, filterLayout});
-    const reshape = this.builder_.reshape(conv4, [1, -1]);
+    const reshape = this.builder_.reshape(conv4, [1, 1001]);
     return this.builder_.softmax(reshape);
   }
 
@@ -126,9 +146,10 @@ export class MobileNetV2Nhwc {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

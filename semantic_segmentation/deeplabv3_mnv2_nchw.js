@@ -1,17 +1,21 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, weightsOrigin} from '../common/utils.js';
 
 /* eslint max-len: ["error", {"code": 120}] */
 
 // DeepLab V3 MobileNet V2 model with 'nchw' input layout
 export class DeepLabV3MNV2Nchw {
   constructor() {
+    this.context_ = null;
+    this.deviceType_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/deeplabv3_mnv2_nchw/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/deeplabv3_mnv2_nchw/weights/';
     // Shares the same bias files with 'nhwc' layout
-    this.biasUrl_ = '../test-data/models/deeplabv3_mnv2_nhwc/weights/';
+    this.biasUrl_ = weightsOrigin() +
+      '/test-data/models/deeplabv3_mnv2_nhwc/weights/';
     this.inputOptions = {
       mean: [127.5, 127.5, 127.5],
       std: [127.5, 127.5, 127.5],
@@ -42,8 +46,16 @@ export class DeepLabV3MNV2Nchw {
 
     options.bias = bias;
     if (activation === 'relu6') {
-      // implement `relu6` by `clamp` of  WebNN API
-      options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      // TODO: Set clamp activation to options once it's supported in
+      // WebNN DML backend.
+      // Implement `clip` by `clamp` of  WebNN API
+      if (this.deviceType_ == 'gpu') {
+        return this.builder_.clamp(
+            this.builder_.conv2d(input, weights, options),
+            {minValue: 0, maxValue: 6});
+      } else {
+        options.activation = this.builder_.clamp({minValue: 0, maxValue: 6});
+      }
     } else if (activation === 'relu') {
       options.activation = this.builder_.relu();
     } else {
@@ -80,12 +92,16 @@ export class DeepLabV3MNV2Nchw {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.deviceType_ = contextOptions.deviceType;
+    this.builder_ = new MLGraphBuilder(this.context_);
     const strides = [2, 2];
 
-    const input = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const conv0 = await this.buildConv_(
         input, ['MobilenetV2_Conv_Conv2D', '', '551'], 'relu6', {strides, padding: [1, 1, 1, 1]});
     const conv1 = await this.buildConv_(
@@ -154,9 +170,10 @@ export class DeepLabV3MNV2Nchw {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

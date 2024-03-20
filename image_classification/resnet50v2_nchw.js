@@ -1,13 +1,15 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, weightsOrigin} from '../common/utils.js';
 
 // ResNet50 V2 model with 'nchw' input layout
 export class ResNet50V2Nchw {
   constructor() {
+    this.context_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/resnet50v2_nchw/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/resnet50v2_nchw/weights/';
     this.inputOptions = {
       mean: [0.485, 0.456, 0.406],
       std: [0.229, 0.224, 0.225],
@@ -61,7 +63,8 @@ export class ResNet50V2Nchw {
     const weight = await buildConstantByNpy(this.builder_, weightName);
     const biasName = prefix + '_bias.npy';
     const bias = await buildConstantByNpy(this.builder_, biasName);
-    const options = {c: this.builder_.reshape(bias, [1, -1]), bTranspose: true};
+    const options =
+        {c: this.builder_.reshape(bias, [1, 1000]), bTranspose: true};
     return this.builder_.gemm(input, weight, options);
   }
 
@@ -90,10 +93,13 @@ export class ResNet50V2Nchw {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
-    const data = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.builder_ = new MLGraphBuilder(this.context_);
+    const data = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const bn1 = await this.buildBatchNorm_(data, '0', '', false);
     const conv0 = await this.buildConv_(
         bn1, '0', '', {padding: [3, 3, 3, 3], strides: [2, 2]});
@@ -143,7 +149,7 @@ export class ResNet50V2Nchw {
 
     const bn3 = await this.buildBatchNorm_(bottleneck16, '2', '');
     const pool2 = await this.builder_.averagePool2d(bn3);
-    const reshape = this.builder_.reshape(pool2, [1, -1]);
+    const reshape = this.builder_.reshape(pool2, [1, 2048]);
     const gemm = await this.buildGemm_(reshape, '0');
     return this.builder_.softmax(gemm);
   }
@@ -160,9 +166,10 @@ export class ResNet50V2Nchw {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

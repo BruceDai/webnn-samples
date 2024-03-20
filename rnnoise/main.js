@@ -1,20 +1,17 @@
 import {Processer} from './processer.js';
 import {RNNoise} from './rnnoise.js';
 import * as utils from '../common/utils.js';
+import {addAlert} from '../common/ui.js';
 
 const batchSize = 1;
 const frames = 100; // Frames is fixed at 100
 const frameSize = 480;
 const gainsSize = 22;
-const weightsUrl = '../test-data/models/rnnoise/weights/';
+const weightsUrl = utils.weightsOrigin() +
+  '/test-data/models/rnnoise/weights/';
 const rnnoise = new RNNoise(weightsUrl, batchSize, frames);
-// GPU takes a long time to build the model in electron and
-// the CPU backend has better performance for RNNoise model.
-let devicePreference = 'cpu';
 
-$('#deviceBtns .btn').on('change', async (e) => {
-  devicePreference = $(e.target).attr('id');
-  await utils.setPolyfillBackend(devicePreference);
+$('#backendBtns .btn').on('change', async () => {
   await main();
 });
 
@@ -113,7 +110,7 @@ async function denoise() {
   const denoiseGruYHBuffer = new Float32Array(
       rnnoise.denoiseGruNumDirections * batchSize *
       rnnoise.denoiseGruHiddenSize);
-  const outputs = {
+  let outputs = {
     'denoiseOutput': outputBuffer,
     'vadGruYH': vadGruYHBuffer,
     'noiseGruYH': noiseGruYHBuffer,
@@ -147,7 +144,7 @@ async function denoise() {
     const preProcessingTime = (performance.now() - start).toFixed(2);
     inputs.input = new Float32Array(features);
     start = performance.now();
-    await rnnoise.computeAsync( inputs, outputs);
+    outputs = await rnnoise.compute(inputs, outputs);
     const executionTime = (performance.now() - start).toFixed(2);
     inputs.vadGruInitialH = outputs.vadGruYH;
     inputs.noiseGruInitialH = outputs.noiseGruYH;
@@ -214,32 +211,41 @@ fileInput.addEventListener('input', (event) => {
   reader.readAsDataURL(event.target.files[0]);
 });
 
-async function main() {
-  await utils.setPolyfillBackend(devicePreference);
-  modelInfo.innerHTML = '';
-  await log(modelInfo, `Creating RNNoise with input shape ` +
-    `[${batchSize} (batch_size) x 100 (frames) x 42].`, true);
-  await log(modelInfo, '- Loading model...');
-  const powerPreference = utils.getUrlParams()[1];
-  const contextOptions = {devicePreference};
-  if (powerPreference) {
-    contextOptions['powerPreference'] = powerPreference;
+export async function main() {
+  try {
+    const [backend, deviceType] =
+        $('input[name="backend"]:checked').attr('id').split('_');
+    await utils.setBackend(backend, deviceType);
+    modelInfo.innerHTML = '';
+    await log(modelInfo, `Creating RNNoise with input shape ` +
+      `[${batchSize} (batch_size) x 100 (frames) x 42].`, true);
+    await log(modelInfo, '- Loading model...');
+    const powerPreference = utils.getUrlParams()[1];
+    const contextOptions = {deviceType};
+    if (powerPreference) {
+      contextOptions['powerPreference'] = powerPreference;
+    }
+    const numThreads = utils.getUrlParams()[2];
+    if (numThreads) {
+      contextOptions['numThreads'] = numThreads;
+    }
+    let start = performance.now();
+    const outputOperand = await rnnoise.load(contextOptions);
+    const loadingTime = (performance.now() - start).toFixed(2);
+    console.log(`loading elapsed time: ${loadingTime} ms`);
+    await log(modelInfo,
+        `done in <span class='text-primary'>${loadingTime}</span> ms.`, true);
+    await log(modelInfo, '- Building model...');
+    start = performance.now();
+    await rnnoise.build(outputOperand);
+    const buildTime = (performance.now() - start).toFixed(2);
+    console.log(`build elapsed time: ${buildTime} ms`);
+    await log(modelInfo,
+        `done in <span class='text-primary'>${buildTime}</span> ms.`, true);
+    await log(modelInfo, 'RNNoise is <b>ready</b>.');
+    $('#choose-audio').attr('disabled', false);
+  } catch (error) {
+    console.log(error);
+    addAlert(error.message);
   }
-  let start = performance.now();
-  const outputOperand = await rnnoise.load(contextOptions);
-  const loadingTime = (performance.now() - start).toFixed(2);
-  console.log(`loading elapsed time: ${loadingTime} ms`);
-  await log(modelInfo,
-      `done in <span class='text-primary'>${loadingTime}</span> ms.`, true);
-  await log(modelInfo, '- Building model...');
-  start = performance.now();
-  await rnnoise.build(outputOperand);
-  const buildTime = (performance.now() - start).toFixed(2);
-  console.log(`build elapsed time: ${buildTime} ms`);
-  await log(modelInfo,
-      `done in <span class='text-primary'>${buildTime}</span> ms.`, true);
-  await log(modelInfo, 'RNNoise is <b>ready</b>.');
-  $('#choose-audio').attr('disabled', false);
 }
-
-window.onload = async () => await main();

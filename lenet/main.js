@@ -17,11 +17,8 @@ digitCanvas.setAttribute('height', 28);
 digitCanvas.setAttribute('width', 28);
 digitCanvas.style.backgroundColor = 'black';
 const digitContext = digitCanvas.getContext('2d');
-let devicePreference = 'gpu';
 
-$('#deviceBtns .btn').on('change', async (e) => {
-  devicePreference = $(e.target).attr('id');
-  await utils.setPolyfillBackend(devicePreference);
+$('#backendBtns .btn').on('change', async () => {
   await main();
 });
 
@@ -61,16 +58,23 @@ function clearResult() {
   }
 }
 
-export async function main() {
+async function main() {
+  const [backend, deviceType] =
+      $('input[name="backend"]:checked').attr('id').split('_');
+  await utils.setBackend(backend, deviceType);
   drawNextDigitFromMnist();
   const pen = new Pen(visualCanvas);
-  const weightUrl = '../test-data/models/lenet_nchw/weights/lenet.bin';
+  const weightUrl = utils.weightsOrigin() +
+    '/test-data/models/lenet_nchw/weights/lenet.bin';
   const lenet = new LeNet(weightUrl);
-  const [numRuns, powerPreference] = utils.getUrlParams();
+  const [numRuns, powerPreference, numThreads] = utils.getUrlParams();
   try {
-    const contextOptions = {devicePreference};
+    const contextOptions = {deviceType};
     if (powerPreference) {
       contextOptions['powerPreference'] = powerPreference;
+    }
+    if (numThreads) {
+      contextOptions['numThreads'] = numThreads;
     }
     let start = performance.now();
     const outputOperand = await lenet.load(contextOptions);
@@ -95,18 +99,17 @@ export async function main() {
       let inferenceTime;
       const inferenceTimeArray = [];
       const input = getInputFromCanvas();
-      const outputBuffer = new Float32Array(utils.sizeOfShape([1, 10]));
+      let outputBuffer = new Float32Array(utils.sizeOfShape([1, 10]));
 
-      if (numRuns > 1) {
-        // Do warm up
-        await lenet.predict(input, outputBuffer);
-      }
+      // Do warm up
+      let results = await lenet.compute(input, outputBuffer);
+
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await lenet.predict(input, outputBuffer);
+        results = await lenet.compute(
+            results.inputs.input, results.outputs.output);
         inferenceTime = performance.now() - start;
         console.log(`execution elapsed time: ${inferenceTime.toFixed(2)} ms`);
-        console.log(`execution result: ${outputBuffer}`);
         inferenceTimeArray.push(inferenceTime);
       }
 
@@ -122,6 +125,7 @@ export async function main() {
             `${medianInferenceTime.toFixed(2)}</span> ms`;
       }
 
+      outputBuffer = results.outputs.output;
       const classes = topK(Array.from(outputBuffer));
       classes.forEach((c, i) => {
         console.log(`\tlabel: ${c.label}, probability: ${c.prob}%`);

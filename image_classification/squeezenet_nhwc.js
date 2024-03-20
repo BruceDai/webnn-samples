@@ -1,13 +1,15 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, computePadding2DForAutoPad, weightsOrigin} from '../common/utils.js';
 
 // SqueezeNet 1.0 model with 'nhwc' layout
 export class SqueezeNetNhwc {
   constructor() {
+    this.context_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.weightsUrl_ = '../test-data/models/squeezenet1.0_nhwc/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+    '/test-data/models/squeezenet1.0_nhwc/weights/';
     this.inputOptions = {
       mean: [127.5, 127.5, 127.5],
       std: [127.5, 127.5, 127.5],
@@ -28,6 +30,14 @@ export class SqueezeNetNhwc {
     options.filterLayout = 'ohwi';
     options.bias = bias;
     options.activation = this.builder_.relu();
+    // WebNN spec drops autoPad support, compute the explicit padding instead.
+    if (options.autoPad == 'same-upper') {
+      options.padding =
+        computePadding2DForAutoPad(
+            /* nwhc */[input.shape()[1], input.shape()[2]],
+            /* ohwi */[weights.shape()[1], weights.shape()[2]],
+            options.strides, options.dilations, options.autoPad);
+    }
     return this.builder_.conv2d(input, weights, options);
   }
 
@@ -40,12 +50,15 @@ export class SqueezeNetNhwc {
   }
 
   async load(contextOptions) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.builder_ = new MLGraphBuilder(this.context_);
     const strides = [2, 2];
     const layout = 'nhwc';
-    const placeholder = this.builder_.input('input',
-        {type: 'float32', dimensions: this.inputOptions.inputDimensions});
+    const placeholder = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
     const conv1 = await this.buildConv_(
         placeholder, 'conv1', {strides, autoPad: 'same-upper'});
     const maxpool1 = this.builder_.maxPool2d(
@@ -65,7 +78,7 @@ export class SqueezeNetNhwc {
     const conv10 = await this.buildConv_(fire9, 'conv10');
     const averagePool2d = this.builder_.averagePool2d(
         conv10, {windowDimensions: [13, 13], layout});
-    const reshape = this.builder_.reshape(averagePool2d, [1, -1]);
+    const reshape = this.builder_.reshape(averagePool2d, [1, 1001]);
     return this.builder_.softmax(reshape);
   }
 
@@ -81,9 +94,10 @@ export class SqueezeNetNhwc {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }

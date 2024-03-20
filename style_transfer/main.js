@@ -20,8 +20,10 @@ let loadTime = 0;
 let buildTime = 0;
 let computeTime = 0;
 let outputBuffer;
-let devicePreference = 'gpu';
-let lastDevicePreference = '';
+let deviceType = '';
+let lastdeviceType = '';
+let backend = '';
+let lastBackend = '';
 const disabledSelectors = [
   '#tabs > li',
   '#gallery',
@@ -34,16 +36,16 @@ $(document).ready(() => {
   $('.badge').html(modelId);
 });
 
-$('#deviceBtns .btn').on('change', async (e) => {
-  devicePreference = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+$('#backendBtns .btn').on('change', async (e) => {
+  [backend, deviceType] =
+      $('input[name="backend"]:checked').attr('id').split('_');
+  if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
   await main();
 });
 
 // Click trigger to do inference with <img> element
 $('#img').click(async () => {
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
-  if (stream !== null) stopCamera();
+  if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
   inputType = 'image';
   $('.shoulddisplay').hide();
   await main();
@@ -61,7 +63,7 @@ $('#gallery .gallery-image').hover((e) => {
 // Click trigger to do inference with switched <img> element
 $('#gallery .gallery-item').click(async (e) => {
   const newModelId = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+  if (inputType === 'camera') utils.stopCameraStream(rafReq, stream);
   if (newModelId !== modelId) {
     isModelChanged = true;
     modelId = newModelId;
@@ -95,24 +97,11 @@ $('#cam').click(async () => {
   await main();
 });
 
-async function getMediaStream() {
-  // Support 'user' facing mode at present
-  const constraints = {audio: false, video: {facingMode: 'user'}};
-  stream = await navigator.mediaDevices.getUserMedia(constraints);
-}
-
-function stopCamera() {
-  stream.getTracks().forEach((track) => {
-    if (track.readyState === 'live' && track.kind === 'video') {
-      track.stop();
-    }
-  });
-}
-
 /**
  * This method is used to render live camera tab.
  */
 async function renderCamStream() {
+  if (!stream.active) return;
   // If the video element's readyState is 0, the video's width and height are 0.
   // So check the readState here to make sure it is greater than 0.
   if (camElement.readyState === 0) {
@@ -124,9 +113,10 @@ async function renderCamStream() {
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  await fastStyleTransferNet.computeAsync(inputBuffer, outputBuffer);
+  const results = await fastStyleTransferNet.compute(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
+  outputBuffer = results.outputs.output;
   camElement.width = camElement.videoWidth;
   camElement.height = camElement.videoHeight;
   drawInput(inputCanvas, 'camInCanvas');
@@ -197,18 +187,22 @@ function showPerfResult(medianComputeTime = undefined) {
 
 export async function main() {
   try {
+    if (backend === '') return;
     ui.handleClick(disabledSelectors, true);
+    if (isFirstTimeLoad) $('#hint').hide();
     let start;
-    const [numRuns, powerPreference] = utils.getUrlParams();
+    const [numRuns, powerPreference, numThreads] = utils.getUrlParams();
 
     // Only do load() and build() when model first time loads,
-    // there's new model choosed, and device backend changed
+    // there's new model choosed, backend changed or device changed
     if (isFirstTimeLoad || isModelChanged ||
-        lastDevicePreference != devicePreference) {
-      if (lastDevicePreference != devicePreference) {
-        // Set polyfill backend
-        await utils.setPolyfillBackend(devicePreference);
-        lastDevicePreference = devicePreference;
+      lastdeviceType != deviceType || lastBackend != backend) {
+      if (lastdeviceType != deviceType || lastBackend != backend) {
+        // Set backend and device
+        await utils.setBackend(backend, deviceType);
+        lastdeviceType = lastdeviceType != deviceType ?
+                                deviceType : lastdeviceType;
+        lastBackend = lastBackend != backend ? backend : lastBackend;
       }
       if (fastStyleTransferNet !== undefined) {
         // Call dispose() to and avoid memory leak
@@ -223,9 +217,12 @@ export async function main() {
       // UI shows model loading progress
       await ui.showProgressComponent('current', 'pending', 'pending');
       console.log('- Loading weights... ');
-      const contextOptions = {devicePreference};
+      const contextOptions = {deviceType};
       if (powerPreference) {
         contextOptions['powerPreference'] = powerPreference;
+      }
+      if (numThreads) {
+        contextOptions['numThreads'] = numThreads;
       }
       start = performance.now();
       const outputOperand =
@@ -248,13 +245,15 @@ export async function main() {
       console.log('- Computing... ');
       const computeTimeArray = [];
       let medianComputeTime;
-      if (numRuns > 1) {
-        // Do warm up
-        await fastStyleTransferNet.computeAsync(inputBuffer, outputBuffer);
-      }
+
+      // Do warm up
+      let results = await fastStyleTransferNet.compute(
+          inputBuffer, outputBuffer);
+
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await fastStyleTransferNet.computeAsync(inputBuffer, outputBuffer);
+        results = await fastStyleTransferNet.compute(
+            results.inputs.input, results.outputs.output);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
@@ -264,13 +263,14 @@ export async function main() {
         medianComputeTime = medianComputeTime.toFixed(2);
         console.log(`  median compute time: ${medianComputeTime} ms`);
       }
+      outputBuffer = results.outputs.output;
       await ui.showProgressComponent('done', 'done', 'done');
       ui.readyShowResultComponents();
       drawInput(imgElement, 'inputCanvas');
       drawOutput('inputCanvas', 'outputCanvas');
       showPerfResult(medianComputeTime);
     } else if (inputType === 'camera') {
-      await getMediaStream();
+      stream = await utils.getMediaStream();
       camElement.srcObject = stream;
       camElement.onloadeddata = await renderCamStream();
       await ui.showProgressComponent('done', 'done', 'done');

@@ -1,17 +1,19 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, weightsOrigin} from '../common/utils.js';
 
 /* eslint max-len: ["error", {"code": 130}] */
 
 // Fast Style Transfer Baseline Model
 export class FastStyleTransferNet {
   constructor() {
+    this.context_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.constPow_ = null;
     this.constAdd_ = null;
-    this.weightsUrl_ = '../test-data/models/fast_style_transfer_nchw/weights/';
+    this.weightsUrl_ = weightsOrigin() +
+      '/test-data/models/fast_style_transfer_nchw/weights/';
     this.inputOptions = {
       inputDimensions: [1, 3, 540, 540],
       inputLayout: 'nchw',
@@ -21,8 +23,12 @@ export class FastStyleTransferNet {
 
   buildInstanceNormalization_(conv2D, variableMul, variableAdd) {
     if ('instanceNormalization' in this.builder_) {
-      return this.builder_.instanceNormalization(conv2D,
-          {scale: this.builder_.squeeze(variableMul), bias: this.builder_.squeeze(variableAdd)});
+      // Use reshape to implement squeeze(variableMul); and squeeze(variableAdd);
+      const mulShape = variableMul.shape().filter((dim) => dim !==1);
+      const addShape = variableAdd.shape().filter((dim) => dim !==1);
+      const mulSqueeze = this.builder_.reshape(variableMul, mulShape);
+      const addSqueeze = this.builder_.reshape(variableAdd, addShape);
+      return this.builder_.instanceNormalization(conv2D, {scale: mulSqueeze, bias: addSqueeze});
     } else {
       const sub = this.builder_.sub(conv2D, this.builder_.reduceMean(conv2D, {axes: [2, 3], keepDimensions: true}));
       const reduceMean = this.builder_.reduceMean(this.builder_.mul(sub, sub), {axes: [2, 3], keepDimensions: true});
@@ -33,8 +39,8 @@ export class FastStyleTransferNet {
   }
 
   async load(contextOptions, modelId) {
-    const context = navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
+    this.context_ = await navigator.ml.createContext(contextOptions);
+    this.builder_ = new MLGraphBuilder(this.context_);
     const baseUrl = this.weightsUrl_ + modelId + '/';
 
     // Create constants by loading pre-trained data from .npy files.
@@ -87,71 +93,81 @@ export class FastStyleTransferNet {
     const variableAdd15 = await buildConstantByNpy(this.builder_, baseUrl + 'Variable_46_read__41__cf__41_0.npy');
     const variableMul15 = await buildConstantByNpy(this.builder_, baseUrl + 'Variable_47_read__42__cf__42_0.npy');
 
-    const padding1 = this.builder_.constant(
-        {type: 'int32', dimensions: [4, 2]}, new Int32Array([0, 0, 0, 0, 1, 1, 1, 1]));
-    const padding4 = this.builder_.constant(
-        {type: 'int32', dimensions: [4, 2]}, new Int32Array([0, 0, 0, 0, 4, 4, 4, 4]));
+    const padding1 = [0, 0, 1, 1];
+    const padding4 = [0, 0, 4, 4];
     this.constAdd_ = this.builder_.constant(
-        {type: 'float32', dimensions: [1]}, new Float32Array([9.999999717180685e-10]));
+        {type: 'float32', dataType: 'float32', dimensions: [1]},
+        new Float32Array([9.999999717180685e-10]),
+    );
     this.constPow_ = this.builder_.constant(
-        {type: 'float32', dimensions: [1]}, new Float32Array([0.5]));
+        {type: 'float32', dataType: 'float32', dimensions: [1]},
+        new Float32Array([0.5]),
+    );
     const constMul0 = this.builder_.constant(
-        {type: 'float32', dimensions: [1]}, new Float32Array([150]));
+        {type: 'float32', dataType: 'float32', dimensions: [1]},
+        new Float32Array([150]),
+    );
     const constAdd0 = this.builder_.constant(
-        {type: 'float32', dimensions: [1]}, new Float32Array([127.5]));
+        {type: 'float32', dataType: 'float32', dimensions: [1]},
+        new Float32Array([127.5]),
+    );
     // Build up the network.
-    const input = this.builder_.input('input', {type: 'float32', dimensions: this.inputOptions.inputDimensions});
-    const conv2D0 = this.builder_.conv2d(this.builder_.pad(input, padding4, {mode: 'reflection'}), weightConv0);
+    const input = this.builder_.input('input', {
+      type: 'float32',
+      dataType: 'float32',
+      dimensions: this.inputOptions.inputDimensions,
+    });
+    const conv2D0 = this.builder_.conv2d(this.builder_.pad(input, padding4, padding4, {mode: 'reflection'}), weightConv0);
 
     const add0 = this.buildInstanceNormalization_(conv2D0, variableMul0, variableAdd0);
     const relu0 = this.builder_.relu(add0);
-    const conv2D1 = this.builder_.conv2d(this.builder_.pad(relu0, padding1, {mode: 'reflection'}),
+    const conv2D1 = this.builder_.conv2d(this.builder_.pad(relu0, padding1, padding1, {mode: 'reflection'}),
         weightConv1, {strides: [2, 2]});
 
     const add1 = this.buildInstanceNormalization_(conv2D1, variableMul1, variableAdd1);
     const relu1 = this.builder_.relu(add1);
-    const conv2D2 = this.builder_.conv2d(this.builder_.pad(relu1, padding1, {mode: 'reflection'}),
+    const conv2D2 = this.builder_.conv2d(this.builder_.pad(relu1, padding1, padding1, {mode: 'reflection'}),
         weightConv2, {strides: [2, 2]});
 
     const add2 = this.buildInstanceNormalization_(conv2D2, variableMul2, variableAdd2);
     const relu2 = this.builder_.relu(add2); // next input
-    const conv2D3 = this.builder_.conv2d(this.builder_.pad(relu2, padding1, {mode: 'reflection'}), weightConv3);
+    const conv2D3 = this.builder_.conv2d(this.builder_.pad(relu2, padding1, padding1, {mode: 'reflection'}), weightConv3);
 
     const add3 = this.buildInstanceNormalization_(conv2D3, variableMul3, variableAdd3);
     const relu3 = this.builder_.relu(add3);
-    const conv2D4 = this.builder_.conv2d(this.builder_.pad(relu3, padding1, {mode: 'reflection'}), weightConv4);
+    const conv2D4 = this.builder_.conv2d(this.builder_.pad(relu3, padding1, padding1, {mode: 'reflection'}), weightConv4);
 
     const add4 = this.buildInstanceNormalization_(conv2D4, variableMul4, variableAdd4);
     const add5 = this.builder_.add(relu2, add4); // next input
-    const conv2D5 = this.builder_.conv2d(this.builder_.pad(add5, padding1, {mode: 'reflection'}), weightConv5);
+    const conv2D5 = this.builder_.conv2d(this.builder_.pad(add5, padding1, padding1, {mode: 'reflection'}), weightConv5);
 
     const add6 = this.buildInstanceNormalization_(conv2D5, variableMul5, variableAdd5);
     const relu4 = this.builder_.relu(add6);
-    const conv2D6 = this.builder_.conv2d(this.builder_.pad(relu4, padding1, {mode: 'reflection'}), weightConv6);
+    const conv2D6 = this.builder_.conv2d(this.builder_.pad(relu4, padding1, padding1, {mode: 'reflection'}), weightConv6);
 
     const add7 = this.buildInstanceNormalization_(conv2D6, variableMul6, variableAdd6);
     const add8 = this.builder_.add(add5, add7); // next input
-    const conv2D7 = this.builder_.conv2d(this.builder_.pad(add8, padding1, {mode: 'reflection'}), weightConv7);
+    const conv2D7 = this.builder_.conv2d(this.builder_.pad(add8, padding1, padding1, {mode: 'reflection'}), weightConv7);
 
     const add9 = this.buildInstanceNormalization_(conv2D7, variableMul7, variableAdd7);
     const relu5 = this.builder_.relu(add9);
-    const conv2D8 = this.builder_.conv2d(this.builder_.pad(relu5, padding1, {mode: 'reflection'}), weightConv8);
+    const conv2D8 = this.builder_.conv2d(this.builder_.pad(relu5, padding1, padding1, {mode: 'reflection'}), weightConv8);
 
     const add10 = this.buildInstanceNormalization_(conv2D8, variableMul8, variableAdd8);
     const add11 = this.builder_.add(add8, add10); // next input
-    const conv2D9 = this.builder_.conv2d(this.builder_.pad(add11, padding1, {mode: 'reflection'}), weightConv9);
+    const conv2D9 = this.builder_.conv2d(this.builder_.pad(add11, padding1, padding1, {mode: 'reflection'}), weightConv9);
 
     const add12 = this.buildInstanceNormalization_(conv2D9, variableMul9, variableAdd9);
     const relu6 = this.builder_.relu(add12);
-    const conv2D10 = this.builder_.conv2d(this.builder_.pad(relu6, padding1, {mode: 'reflection'}), weightConv10);
+    const conv2D10 = this.builder_.conv2d(this.builder_.pad(relu6, padding1, padding1, {mode: 'reflection'}), weightConv10);
 
     const add13 = this.buildInstanceNormalization_(conv2D10, variableMul10, variableAdd10);
     const add14 = this.builder_.add(add11, add13); // next input
-    const conv2D11 = this.builder_.conv2d(this.builder_.pad(add14, padding1, {mode: 'reflection'}), weightConv11);
+    const conv2D11 = this.builder_.conv2d(this.builder_.pad(add14, padding1, padding1, {mode: 'reflection'}), weightConv11);
 
     const add15 = this.buildInstanceNormalization_(conv2D11, variableMul11, variableAdd11);
     const relu7 = this.builder_.relu(add15);
-    const conv2D12 = this.builder_.conv2d(this.builder_.pad(relu7, padding1, {mode: 'reflection'}), weightConv12);
+    const conv2D12 = this.builder_.conv2d(this.builder_.pad(relu7, padding1, padding1, {mode: 'reflection'}), weightConv12);
 
     const add16 = this.buildInstanceNormalization_(conv2D12, variableMul12, variableAdd12);
     const add17 = this.builder_.add(add14, add16);
@@ -165,7 +181,7 @@ export class FastStyleTransferNet {
 
     const add19 = this.buildInstanceNormalization_(convTranspose1, variableMul14, variableAdd14);
     const relu9 = this.builder_.relu(add19);
-    const conv2D13 = this.builder_.conv2d(this.builder_.pad(relu9, padding4, {mode: 'reflection'}), weightConv13);
+    const conv2D13 = this.builder_.conv2d(this.builder_.pad(relu9, padding4, padding4, {mode: 'reflection'}), weightConv13);
 
     const add20 = this.buildInstanceNormalization_(conv2D13, variableMul15, variableAdd15);
     return this.builder_.add(this.builder_.mul(this.builder_.tanh(add20), constMul0), constAdd0);
@@ -183,9 +199,10 @@ export class FastStyleTransferNet {
     }
   }
 
-  async computeAsync(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    const results = await this.context_.compute(this.graph_, inputs, outputs);
+    return results;
   }
 }
